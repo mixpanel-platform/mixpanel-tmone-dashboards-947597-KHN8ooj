@@ -5,11 +5,141 @@
     <link rel="stylesheet" type="text/css" href="https://cdn.mxpnl.com/libs/mixpanel-platform/css/reset.css">
     <link rel="stylesheet" type="text/css" href="https://cdn.mxpnl.com/libs/mixpanel-platform/build/mixpanel-platform.v0.latest.min.css">
     <script src="https://cdn.mxpnl.com/libs/mixpanel-platform/build/mixpanel-platform.v0.latest.min.js"></script>
+    <style>
+    .mixpanel-platform-select.event_selector_theme {
+      max-width: 50px;
+    }
+    .blank {
+      color: #f0f2f6;
+    }
+    .label {
+      text-align: right;
+      font-weight: 500;
+    }
+    .mp_chart_row_label {
+      width: 65px !important;
+    }
+    .big {
+      font-weight: 600;
+      font-size: 150%;
+      text-align: center;
+    }
+    </style>
   </head>
   <body class="mixpanel-platform-body">
-    <h1>Hello, World!</h1>
+    <div class="mixpanel-platform-section" style='width:919px'>
+      <table style='width:919px'>
+        <tr>
+          <td width='371'><div id="eventSelect" style="float: right; margin-right: 50px;"></div></td>
+          <td width='177' class='blank'>.</td>
+          <td width='371'><div id="dateSelect" style="float: left;"></div></td>
+        </tr>
+        <tr>
+          <td colspan='3' class='blank'>.</td>
+        </tr>
+        <tr>
+          <td><div id="num_days" style="float: right; margin-right: 50px;"></div></td>
+          <td class='big'>ACTIVE</td>
+          <td><div id="propSelect" style="float: left;"></div></td>
+        </tr>
+        <tr>
+          <td colspan='3' class='blank'>.</td>
+        </tr>
+      </table>
+      <div style="clear: both;"></div>
+      <div id="graph"></div>
+    </div>
+    <div id="table"></div>
+    <script id='query'>
+      function main() {
+        var getBeginningOfBucket = function(epoch) {
+          var today_in_parts = params.to_date.split('-');
+          var bucket = new Date(Number(today_in_parts[0]), Number(today_in_parts[1]) - 1, Number(today_in_parts[2]) + 1).valueOf();
+          while (epoch < bucket)
+            bucket -= params.num_days * 24 * 60 * 60 * 1000;
+          return new Date(bucket).toISOString().slice(0, -14);
+        };
+        var bad_events = {"$campaign_delivery":true,"$campaign_marked_spam":true,"$campaign_bounced":true,"$campaign_open":true,"$experiment_started":true,"$show_survey":true};
+        var event_selectors = [];
+        if (params.event_name) {
+          event_selectors.push({'event': params.event_name});
+        }
+        if (!params.grouping || params.grouping == 'distinct_id') {
+          return Events({
+            from_date: params.from_date,
+            to_date: params.to_date,
+            event_selectors: event_selectors
+          })
+          .filter(item => !bad_events[item.name])
+          .groupByUser([item => getBeginningOfBucket(item.time)], (accums, items) => true)
+          .groupBy([item => item.key[1]], mixpanel.reducer.count());
+        }
+        else {
+          return Events({
+            from_date: params.from_date,
+            to_date: params.to_date,
+            event_selectors: event_selectors
+          })
+          .filter(item => !bad_events[item.name] && item.properties[params.grouping])
+          .groupBy([
+            item => item.properties[params.grouping],
+            item => getBeginningOfBucket(item.time)
+            ], (accums, items) => true)
+          .groupBy([item => item.key[1]], mixpanel.reducer.count());
+        }
+      }
+    </script>
     <script>
-      // Run queries and display results here
+      var eventSelect = '';
+      var dateSelect  = $('#dateSelect').MPDatepicker();
+      var bucket_size = $('#num_days').MPSelect({items: [{label: 'Daily', value: 1},
+                                                          {label: 'Weekly', value: 7},
+                                                          {label: 'Bi-weekly', value: 14},
+                                                          {label: 'Monthly', value: 30}]});
+      bucket_size.val(7);
+      var eventGraph  = $('#graph').MPChart({chartType: 'line'});
+      var eventTable  = $('#table').MPTable({
+        showPercentages: true,
+        firstColHeader: 'Event'
+      });
+      var property = '';
+      var runQuery = function() {
+        var script = document.getElementById('query').innerHTML;
+        var params = {
+          event_name: eventSelect.MPSelect('value'),
+          grouping: property.MPSelect('value'),
+          num_days: bucket_size.MPSelect('value'),
+          from_date: dateSelect.MPDatepicker('value').from.toISOString().slice(0, -14),
+          to_date: dateSelect.MPDatepicker('value').to.toISOString().slice(0, -14),
+        };
+        MP.api.jql(script, params).done(function(results) {
+          var res = {};
+          var group = params.grouping == 'distinct_id' || !params.grouping? 'Users' : params.grouping;
+          res[group] = {};
+          _.each(results, function(item) {
+            res[group][item.key[0]] = item.value;
+          });
+          var table_res = res[group];
+          eventGraph.MPChart('setData', res);
+          eventTable.MPTable('setData', table_res);
+        });
+      };
+      dateSelect.on('change', runQuery);
+      bucket_size.on('change', function(e, selection) {runQuery();});
+      MP.api.query('api/2.0/events/properties/top/', {limit: 255}).done(function(properties) {
+        MP.api.query('api/2.0/events/names/', {limit: 255}).done(function(events) {
+          var props = _.map(properties, function(item, key) {return {label: key, value: key};});
+          var event_list = _.map(events, function(item) {return {label: item, value: item};});
+          props.unshift({label: 'Users', value: undefined});
+          event_list.unshift({label: 'All Events', value: undefined});
+          property = $('#propSelect').MPSelect({items: props});
+          property.on('change', function() {runQuery();});
+          debugger;
+          eventSelect = $('#eventSelect').MPSelect({items: event_list});
+          eventSelect.on('change', function() {runQuery();});
+          setTimeout(function() {runQuery();}, 1000);
+        });
+      });
     </script>
   </body>
 </html>
